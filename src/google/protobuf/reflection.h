@@ -39,6 +39,7 @@
 #endif
 
 #include <google/protobuf/message.h>
+#include <google/protobuf/generated_enum_util.h>
 
 namespace google {
 namespace protobuf {
@@ -355,7 +356,7 @@ class LIBPROTOBUF_EXPORT RepeatedFieldAccessor {
   virtual void Swap(Field* data, const RepeatedFieldAccessor* other_mutator,
                     Field* other_data) const = 0;
 
-  // Create an iterator that points at the begining of the repeated field.
+  // Create an iterator that points at the beginning of the repeated field.
   virtual Iterator* BeginIterator(const Field* data) const = 0;
   // Create an iterator that points at the end of the repeated field.
   virtual Iterator* EndIterator(const Field* data) const = 0;
@@ -552,7 +553,7 @@ struct RefTypeTraits<
 
 template<typename T>
 struct RefTypeTraits<
-    T, typename internal::enable_if<internal::is_same<string, T>::value>::type> {
+    T, typename internal::enable_if< ::google::protobuf::internal::is_same<string, T>::value>::type> {
   typedef RepeatedFieldRefIterator<T> iterator;
   typedef RepeatedFieldAccessor AccessorType;
   typedef string AccessorValueType;

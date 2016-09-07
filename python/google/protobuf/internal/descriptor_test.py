@@ -1,4 +1,4 @@
-#! /usr/bin/python
+#! /usr/bin/env python
 #
 # Protocol Buffers - Google's data interchange format
 # Copyright 2008 Google Inc.  All rights reserved.
@@ -36,13 +36,19 @@ __author__ = 'robinson@google.com (Will Robinson)'
 
 import sys
 
-from google.apputils import basetest
+try:
+  import unittest2 as unittest  #PY26
+except ImportError:
+  import unittest
+
 from google.protobuf import unittest_custom_options_pb2
 from google.protobuf import unittest_import_pb2
 from google.protobuf import unittest_pb2
 from google.protobuf import descriptor_pb2
 from google.protobuf.internal import api_implementation
+from google.protobuf.internal import test_util
 from google.protobuf import descriptor
+from google.protobuf import descriptor_pool
 from google.protobuf import symbol_database
 from google.protobuf import text_format
 
@@ -52,7 +58,7 @@ name: 'TestEmptyMessage'
 """
 
 
-class DescriptorTest(basetest.TestCase):
+class DescriptorTest(unittest.TestCase):
 
   def setUp(self):
     file_proto = descriptor_pb2.FileDescriptorProto(
@@ -71,27 +77,27 @@ class DescriptorTest(basetest.TestCase):
     enum_proto.value.add(name='FOREIGN_BAR', number=5)
     enum_proto.value.add(name='FOREIGN_BAZ', number=6)
 
-    descriptor_pool = symbol_database.Default().pool
-    descriptor_pool.Add(file_proto)
-    self.my_file = descriptor_pool.FindFileByName(file_proto.name)
+    file_proto.message_type.add(name='ResponseMessage')
+    service_proto = file_proto.service.add(
+        name='Service')
+    method_proto = service_proto.method.add(
+        name='CallMethod',
+        input_type='.protobuf_unittest.NestedMessage',
+        output_type='.protobuf_unittest.ResponseMessage')
+
+    # Note: Calling DescriptorPool.Add() multiple times with the same file only
+    # works if the input is canonical; in particular, all type names must be
+    # fully qualified.
+    self.pool = self.GetDescriptorPool()
+    self.pool.Add(file_proto)
+    self.my_file = self.pool.FindFileByName(file_proto.name)
     self.my_message = self.my_file.message_types_by_name[message_proto.name]
     self.my_enum = self.my_message.enum_types_by_name[enum_proto.name]
+    self.my_service = self.my_file.services_by_name[service_proto.name]
+    self.my_method = self.my_service.methods_by_name[method_proto.name]
 
-    self.my_method = descriptor.MethodDescriptor(
-        name='Bar',
-        full_name='protobuf_unittest.TestService.Bar',
-        index=0,
-        containing_service=None,
-        input_type=None,
-        output_type=None)
-    self.my_service = descriptor.ServiceDescriptor(
-        name='TestServiceWithOptions',
-        full_name='protobuf_unittest.TestServiceWithOptions',
-        file=self.my_file,
-        index=0,
-        methods=[
-            self.my_method
-        ])
+  def GetDescriptorPool(self):
+    return symbol_database.Default().pool
 
   def testEnumValueName(self):
     self.assertEqual(self.my_message.EnumValueName('ForeignEnum', 4),
@@ -130,13 +136,14 @@ class DescriptorTest(basetest.TestCase):
     file_descriptor = unittest_custom_options_pb2.DESCRIPTOR
     message_descriptor =\
         unittest_custom_options_pb2.TestMessageWithCustomOptions.DESCRIPTOR
-    field_descriptor = message_descriptor.fields_by_name["field1"]
-    enum_descriptor = message_descriptor.enum_types_by_name["AnEnum"]
+    field_descriptor = message_descriptor.fields_by_name['field1']
+    oneof_descriptor = message_descriptor.oneofs_by_name['AnOneof']
+    enum_descriptor = message_descriptor.enum_types_by_name['AnEnum']
     enum_value_descriptor =\
-        message_descriptor.enum_values_by_name["ANENUM_VAL2"]
+        message_descriptor.enum_values_by_name['ANENUM_VAL2']
     service_descriptor =\
         unittest_custom_options_pb2.TestServiceWithCustomOptions.DESCRIPTOR
-    method_descriptor = service_descriptor.FindMethodByName("Foo")
+    method_descriptor = service_descriptor.FindMethodByName('Foo')
 
     file_options = file_descriptor.GetOptions()
     file_opt1 = unittest_custom_options_pb2.file_opt1
@@ -149,6 +156,9 @@ class DescriptorTest(basetest.TestCase):
     self.assertEqual(8765432109, field_options.Extensions[field_opt1])
     field_opt2 = unittest_custom_options_pb2.field_opt2
     self.assertEqual(42, field_options.Extensions[field_opt2])
+    oneof_options = oneof_descriptor.GetOptions()
+    oneof_opt1 = unittest_custom_options_pb2.oneof_opt1
+    self.assertEqual(-99, oneof_options.Extensions[oneof_opt1])
     enum_options = enum_descriptor.GetOptions()
     enum_opt1 = unittest_custom_options_pb2.enum_opt1
     self.assertEqual(-789, enum_options.Extensions[enum_opt1])
@@ -389,8 +399,11 @@ class DescriptorTest(basetest.TestCase):
   def testFileDescriptor(self):
     self.assertEqual(self.my_file.name, 'some/filename/some.proto')
     self.assertEqual(self.my_file.package, 'protobuf_unittest')
+    self.assertEqual(self.my_file.pool, self.pool)
+    # Generated modules also belong to the default pool.
+    self.assertEqual(unittest_pb2.DESCRIPTOR.pool, descriptor_pool.Default())
 
-  @basetest.unittest.skipIf(
+  @unittest.skipIf(
       api_implementation.Type() != 'cpp' or api_implementation.Version() != 2,
       'Immutability of descriptors is only enforced in v2 implementation')
   def testImmutableCppDescriptor(self):
@@ -403,7 +416,14 @@ class DescriptorTest(basetest.TestCase):
       message_descriptor.fields.append(None)
 
 
-class GeneratedDescriptorTest(basetest.TestCase):
+class NewDescriptorTest(DescriptorTest):
+  """Redo the same tests as above, but with a separate DescriptorPool."""
+
+  def GetDescriptorPool(self):
+    return descriptor_pool.DescriptorPool()
+
+
+class GeneratedDescriptorTest(unittest.TestCase):
   """Tests for the properties of descriptors in generated code."""
 
   def CheckMessageDescriptor(self, message_descriptor):
@@ -421,10 +441,12 @@ class GeneratedDescriptorTest(basetest.TestCase):
     self.CheckDescriptorSequence(message_descriptor.fields)
     self.CheckDescriptorMapping(message_descriptor.fields_by_name)
     self.CheckDescriptorMapping(message_descriptor.fields_by_number)
+    self.CheckDescriptorMapping(message_descriptor.fields_by_camelcase_name)
 
   def CheckFieldDescriptor(self, field_descriptor):
     # Basic properties
     self.assertEqual(field_descriptor.name, 'optional_int32')
+    self.assertEqual(field_descriptor.camelcase_name, 'optionalInt32')
     self.assertEqual(field_descriptor.full_name,
                      'protobuf_unittest.TestAllTypes.optional_int32')
     self.assertEqual(field_descriptor.containing_type.name, 'TestAllTypes')
@@ -432,6 +454,10 @@ class GeneratedDescriptorTest(basetest.TestCase):
     self.assertEqual(field_descriptor, field_descriptor)
     self.assertEqual(
         field_descriptor.containing_type.fields_by_name['optional_int32'],
+        field_descriptor)
+    self.assertEqual(
+        field_descriptor.containing_type.fields_by_camelcase_name[
+            'optionalInt32'],
         field_descriptor)
     self.assertIn(field_descriptor, [field_descriptor])
     self.assertIn(field_descriptor, {field_descriptor: None})
@@ -455,7 +481,7 @@ class GeneratedDescriptorTest(basetest.TestCase):
     # properties of an immutable abc.Mapping.
     self.assertGreater(len(mapping), 0)  # Sized
     self.assertEqual(len(mapping), len(list(mapping)))  # Iterable
-    if sys.version_info.major >= 3:
+    if sys.version_info >= (3,):
       key, item = next(iter(mapping.items()))
     else:
       key, item = mapping.items()[0]
@@ -464,7 +490,7 @@ class GeneratedDescriptorTest(basetest.TestCase):
     # keys(), iterkeys() &co
     item = (next(iter(mapping.keys())), next(iter(mapping.values())))
     self.assertEqual(item, next(iter(mapping.items())))
-    if sys.version_info.major < 3:
+    if sys.version_info < (3,):
       def CheckItems(seq, iterator):
         self.assertEqual(next(iterator), seq[0])
         self.assertEqual(list(iterator), seq[1:])
@@ -476,6 +502,9 @@ class GeneratedDescriptorTest(basetest.TestCase):
     message_descriptor = unittest_pb2.TestAllTypes.DESCRIPTOR
     self.CheckMessageDescriptor(message_descriptor)
     field_descriptor = message_descriptor.fields_by_name['optional_int32']
+    self.CheckFieldDescriptor(field_descriptor)
+    field_descriptor = message_descriptor.fields_by_camelcase_name[
+        'optionalInt32']
     self.CheckFieldDescriptor(field_descriptor)
 
   def testCppDescriptorContainer(self):
@@ -493,7 +522,7 @@ class GeneratedDescriptorTest(basetest.TestCase):
     self.assertEqual('FOO', next(values_iter).name)
 
 
-class DescriptorCopyToProtoTest(basetest.TestCase):
+class DescriptorCopyToProtoTest(unittest.TestCase):
   """Tests for CopyTo functions of Descriptor."""
 
   def _AssertProtoEqual(self, actual_proto, expected_class, expected_ascii):
@@ -569,7 +598,7 @@ class DescriptorCopyToProtoTest(basetest.TestCase):
       """
 
     self._InternalTestCopyToProto(
-        unittest_pb2._FOREIGNENUM,
+        unittest_pb2.ForeignEnum.DESCRIPTOR,
         descriptor_pb2.EnumDescriptorProto,
         TEST_FOREIGN_ENUM_ASCII)
 
@@ -694,7 +723,7 @@ class DescriptorCopyToProtoTest(basetest.TestCase):
     #    TEST_SERVICE_ASCII)
 
 
-class MakeDescriptorTest(basetest.TestCase):
+class MakeDescriptorTest(unittest.TestCase):
 
   def testMakeDescriptorWithNestedFields(self):
     file_descriptor_proto = descriptor_pb2.FileDescriptorProto()
@@ -772,8 +801,23 @@ class MakeDescriptorTest(basetest.TestCase):
     reformed_descriptor = descriptor.MakeDescriptor(descriptor_proto)
 
     options = reformed_descriptor.GetOptions()
-    self.assertEquals(101,
+    self.assertEqual(101,
                       options.Extensions[unittest_custom_options_pb2.msgopt].i)
 
+  def testCamelcaseName(self):
+    descriptor_proto = descriptor_pb2.DescriptorProto()
+    descriptor_proto.name = 'Bar'
+    names = ['foo_foo', 'FooBar', 'fooBaz', 'fooFoo', 'foobar']
+    camelcase_names = ['fooFoo', 'fooBar', 'fooBaz', 'fooFoo', 'foobar']
+    for index in range(len(names)):
+      field = descriptor_proto.field.add()
+      field.number = index + 1
+      field.name = names[index]
+    result = descriptor.MakeDescriptor(descriptor_proto)
+    for index in range(len(camelcase_names)):
+      self.assertEqual(result.fields[index].camelcase_name,
+                       camelcase_names[index])
+
+
 if __name__ == '__main__':
-  basetest.main()
+  unittest.main()
